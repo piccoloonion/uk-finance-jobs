@@ -1,0 +1,204 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import JobCard from "@/components/JobCard";
+import KeywordInput from "@/components/KeywordInput";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+interface Job {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_predicted: boolean;
+  created: string;
+  description: string;
+  url: string;
+  category: string;
+  whitelist_match: boolean;
+  contract_type: string;
+}
+
+export default function Home() {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [keywords, setKeywords] = useState<string[]>([
+    "Senior Software Engineer",
+    "Senior Data Engineer",
+  ]);
+  const [daysAgo, setDaysAgo] = useState(7);
+  const [lastFetchSource, setLastFetchSource] = useState<string>("");
+
+  const fetchJobs = async () => {
+    setLoading(true);
+    setLastFetchSource("");
+    try {
+      const res = await fetch(`${API_URL}/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywords, days_ago: daysAgo }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`API returned ${res.status}`);
+      }
+
+      const data = await res.json();
+      setJobs(data);
+
+      // Check if we can tell if it was cached
+      // In production, the backend could return a header indicating cache hit
+      setLastFetchSource("Data loaded");
+    } catch (error) {
+      console.error("Fetch error:", error);
+      setJobs([]);
+      setLastFetchSource("Error loading jobs");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeywordChange = (newKeywords: string[]) => {
+    setKeywords(newKeywords);
+    // Auto-fetch when keywords change (as requested)
+    setTimeout(() => fetchJobs(), 100);
+  };
+
+  const addKeyword = (keyword: string) => {
+    if (keyword.trim() && !keywords.includes(keyword.trim())) {
+      handleKeywordChange([...keywords, keyword.trim()]);
+    }
+  };
+
+  const removeKeyword = (keyword: string) => {
+    handleKeywordChange(keywords.filter((k) => k !== keyword));
+  };
+
+  useEffect(() => {
+    fetchJobs();
+  }, []);
+
+  return (
+    <main className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b border-gray-200">
+        <div className="max-w-6xl mx-auto px-4 py-6">
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-2xl font-bold text-gray-900">
+              💼 UK Finance Jobs
+            </h1>
+            <div className="text-sm text-gray-500">
+              {lastFetchSource && (
+                <span className="bg-gray-100 px-3 py-1 rounded-full">
+                  {lastFetchSource}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <p className="text-gray-600 text-sm mb-4">
+            Aggregated from Adzuna • Filtered for UK Financial Sector • Daily
+            Cached
+          </p>
+
+          {/* Controls */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Time Filter */}
+            <div className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2">
+              <label className="text-sm font-medium text-gray-700">
+                Date Range:
+              </label>
+              <select
+                value={daysAgo}
+                onChange={(e) => {
+                  setDaysAgo(Number(e.target.value));
+                  setTimeout(() => fetchJobs(), 100);
+                }}
+                className="bg-white border rounded px-2 py-1 text-sm"
+              >
+                <option value={7}>Last 7 days</option>
+                <option value={14}>Last 14 days</option>
+              </select>
+            </div>
+
+            {/* Refresh */}
+            <button
+              onClick={fetchJobs}
+              disabled={loading}
+              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg disabled:opacity-50"
+            >
+              {loading ? "Loading..." : "Refresh Jobs"}
+            </button>
+          </div>
+
+          {/* Keyword Pills */}
+          <div className="flex flex-wrap items-center gap-2 mt-3">
+            <span className="text-sm text-gray-500 font-medium">Keywords:</span>
+            {keywords.map((kw) => (
+              <KeywordInput
+                key={kw}
+                keyword={kw}
+                onRemove={() => removeKeyword(kw)}
+              />
+            ))}
+            <input
+              type="text"
+              placeholder="+ Add keyword..."
+              className="border rounded-lg px-3 py-1 text-sm w-40"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const val = (e.target as HTMLInputElement).value;
+                  addKeyword(val);
+                  (e.target as HTMLInputElement).value = "";
+                }
+              }}
+            />
+          </div>
+        </div>
+      </header>
+
+      {/* Results */}
+      <section className="max-w-6xl mx-auto px-4 py-8">
+        {/* Summary */}
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-lg font-semibold text-gray-800">
+            {loading ? (
+              <span className="loading-pulse">Searching for jobs...</span>
+            ) : (
+              `${jobs.length} jobs found`
+            )}
+          </h2>
+          <div className="flex items-center gap-4 text-sm text-gray-500">
+            <span>
+              ⭐ {jobs.filter((j) => j.whitelist_match).length} whitelist
+              matches
+            </span>
+            <span>
+              📊 {jobs.length - jobs.filter((j) => j.whitelist_match).length}{" "}
+              finance-relevant
+            </span>
+          </div>
+        </div>
+
+        {/* Job Grid */}
+        {jobs.length === 0 && !loading ? (
+          <div className="text-center py-16">
+            <p className="text-gray-500 text-lg">No jobs found</p>
+            <p className="text-gray-400 text-sm mt-2">
+              Try different keywords or expand the date range
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-4">
+            {jobs.map((job) => (
+              <JobCard key={job.id} job={job} />
+            ))}
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
