@@ -49,8 +49,6 @@ export default function Home() {
       const data = await res.json();
       setJobs(data);
 
-      // Check if we can tell if it was cached
-      // In production, the backend could return a header indicating cache hit
       setLastFetchSource("Data loaded");
     } catch (error) {
       console.error("Fetch error:", error);
@@ -63,7 +61,6 @@ export default function Home() {
 
   const handleKeywordChange = (newKeywords: string[]) => {
     setKeywords(newKeywords);
-    // Auto-fetch when keywords change (as requested)
     setTimeout(() => fetchJobs(), 100);
   };
 
@@ -81,104 +78,106 @@ export default function Home() {
     fetchJobs();
   }, []);
 
+  const whitelistCount = jobs.filter((j) => j.whitelist_match).length;
+  const financeCount = jobs.length - whitelistCount;
+
   return (
     <main className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-6xl mx-auto px-4 py-6">
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-2xl font-bold text-gray-900">
-              💼 UK Finance Jobs
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-6">
+          {/* Title row */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
+              UK Finance Jobs
             </h1>
-            <div className="text-sm text-gray-500">
-              {lastFetchSource && (
-                <span className="bg-gray-100 px-3 py-1 rounded-full">
-                  {lastFetchSource}
-                </span>
-              )}
-            </div>
+            {lastFetchSource && (
+              <span className="bg-gray-100 px-3 py-1 rounded-full text-sm text-gray-500 self-start sm:self-auto">
+                {lastFetchSource}
+              </span>
+            )}
           </div>
 
-          <p className="text-gray-600 text-sm mb-4">
-            Aggregated from Adzuna • Filtered for UK Financial Sector • Daily
-            Cached
+          <p className="text-gray-600 text-xs sm:text-sm mb-4">
+            Aggregated from Adzuna • UK Financial Sector • Daily Cached
           </p>
 
-          {/* Controls */}
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Time Filter */}
-            <div className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2">
-              <label className="text-sm font-medium text-gray-700">
-                Date Range:
-              </label>
-              <select
-                value={daysAgo}
-                onChange={(e) => {
-                  setDaysAgo(Number(e.target.value));
-                  setTimeout(() => fetchJobs(), 100);
-                }}
-                className="bg-white border rounded px-2 py-1 text-sm"
+          {/* Controls - stacked on mobile, inline on desktop */}
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Date Filter */}
+              <div className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Date Range:
+                </label>
+                <select
+                  value={daysAgo}
+                  onChange={(e) => {
+                    setDaysAgo(Number(e.target.value));
+                    setTimeout(() => fetchJobs(), 100);
+                  }}
+                  className="bg-white border rounded px-2 py-1 text-sm"
+                >
+                  <option value={7}>Last 7 days</option>
+                  <option value={14}>Last 14 days</option>
+                </select>
+              </div>
+
+              {/* Refresh */}
+              <button
+                onClick={fetchJobs}
+                disabled={loading}
+                className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg disabled:opacity-50 transition-colors"
               >
-                <option value={7}>Last 7 days</option>
-                <option value={14}>Last 14 days</option>
-              </select>
+                {loading ? "Loading..." : "Refresh Jobs"}
+              </button>
             </div>
 
-            {/* Refresh */}
-            <button
-              onClick={fetchJobs}
-              disabled={loading}
-              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg disabled:opacity-50"
-            >
-              {loading ? "Loading..." : "Refresh Jobs"}
-            </button>
-          </div>
-
-          {/* Keyword Pills */}
-          <div className="flex flex-wrap items-center gap-2 mt-3">
-            <span className="text-sm text-gray-500 font-medium">Keywords:</span>
-            {keywords.map((kw) => (
-              <KeywordInput
-                key={kw}
-                keyword={kw}
-                onRemove={() => removeKeyword(kw)}
+            {/* Keyword Pills */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-gray-500 font-medium">Keywords:</span>
+              {keywords.map((kw) => (
+                <KeywordInput
+                  key={kw}
+                  keyword={kw}
+                  onRemove={() => removeKeyword(kw)}
+                />
+              ))}
+              <input
+                type="text"
+                placeholder="+ Add keyword..."
+                className="border rounded-lg px-3 py-1 text-sm w-full sm:w-40"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const val = (e.target as HTMLInputElement).value;
+                    addKeyword(val);
+                    (e.target as HTMLInputElement).value = "";
+                  }
+                }}
               />
-            ))}
-            <input
-              type="text"
-              placeholder="+ Add keyword..."
-              className="border rounded-lg px-3 py-1 text-sm w-40"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  const val = (e.target as HTMLInputElement).value;
-                  addKeyword(val);
-                  (e.target as HTMLInputElement).value = "";
-                }
-              }}
-            />
+            </div>
           </div>
         </div>
       </header>
 
       {/* Results */}
-      <section className="max-w-6xl mx-auto px-4 py-8">
-        {/* Summary */}
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-gray-800">
+      <section className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
+        {/* Summary - stacked on mobile */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 sm:mb-6 gap-2">
+          <h2 className="text-base sm:text-lg font-semibold text-gray-800">
             {loading ? (
-              <span className="loading-pulse">Searching for jobs...</span>
+              <span className="animate-pulse">Searching for jobs...</span>
             ) : (
               `${jobs.length} jobs found`
             )}
           </h2>
-          <div className="flex items-center gap-4 text-sm text-gray-500">
+          <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
             <span>
-              ⭐ {jobs.filter((j) => j.whitelist_match).length} whitelist
-              matches
+              {whitelistCount} whitelist match{whitelistCount !== 1 ? "es" : ""}
             </span>
+            <span className="text-gray-300">|</span>
             <span>
-              📊 {jobs.length - jobs.filter((j) => j.whitelist_match).length}{" "}
-              finance-relevant
+              {financeCount} finance-relevant
             </span>
           </div>
         </div>
@@ -192,7 +191,7 @@ export default function Home() {
             </p>
           </div>
         ) : (
-          <div className="grid gap-4">
+          <div className="flex flex-col gap-3 sm:gap-4">
             {jobs.map((job) => (
               <JobCard key={job.id} job={job} />
             ))}
