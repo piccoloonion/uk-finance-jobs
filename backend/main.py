@@ -113,6 +113,10 @@ def get_daily_cache_key(keyword: str, days_ago: int) -> str:
     raw = f"{keyword}_{days_ago}_{today_str}"
     return hashlib.md5(raw.encode()).hexdigest()
 
+@app.options("/search")
+async def search_options():
+    return ""
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
