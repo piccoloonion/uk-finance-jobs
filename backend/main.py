@@ -21,11 +21,9 @@ app = FastAPI(title="UK Finance Job Aggregator")
 
 # SECURITY FIX 1: Lock CORS to specific origins (not wildcard)
 # Add your production domain here before deploying
-ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    # "https://yourdomain.com",  # Add production domain here
-]
+import os as _os
+CORS_ORIGINS_ENV = _os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+ALLOWED_ORIGINS = [origin.strip() for origin in CORS_ORIGINS_ENV.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
