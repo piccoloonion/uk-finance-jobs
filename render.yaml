@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: uk-finance-jobs-api
+    env: python
+    rootDir: backend
+    buildCommand: apt-get update && apt-get install -y gcc && pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: DB_PATH
+        value: ./jobs_cache.db
+    healthCheckPath: /health
+
+  - type: cron
+    name: uk-finance-daily-alerts
+    env: python
+    rootDir: backend
+    buildCommand: apt-get update && apt-get install -y gcc && pip install -r requirements.txt
+    startCommand: python send_alerts.py
+    schedule: "0 9 * * 1-5"
+    envVars:
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false

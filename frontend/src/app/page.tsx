@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import JobCard from "@/components/JobCard";
 import KeywordInput from "@/components/KeywordInput";
+import SubscribeModal from "@/components/SubscribeModal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -31,6 +32,7 @@ export default function Home() {
   ]);
   const [daysAgo, setDaysAgo] = useState(7);
   const [lastFetchSource, setLastFetchSource] = useState<string>("");
+  const [showSubscribe, setShowSubscribe] = useState(false);
 
   const fetchJobs = async () => {
     setLoading(true);
@@ -91,11 +93,19 @@ export default function Home() {
             <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
               UK Finance Jobs
             </h1>
-            {lastFetchSource && (
-              <span className="bg-gray-100 px-3 py-1 rounded-full text-sm text-gray-500 self-start sm:self-auto">
-                {lastFetchSource}
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {lastFetchSource && (
+                <span className="bg-gray-100 px-3 py-1 rounded-full text-sm text-gray-500 self-start sm:self-auto">
+                  {lastFetchSource}
+                </span>
+              )}
+              <button
+                onClick={() => setShowSubscribe(true)}
+                className="bg-green-600 hover:bg-green-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors whitespace-nowrap"
+              >
+                Get Job Alerts
+              </button>
+            </div>
           </div>
 
           <p className="text-gray-600 text-xs sm:text-sm mb-4">
@@ -198,6 +208,12 @@ export default function Home() {
           </div>
         )}
       </section>
+
+      <SubscribeModal
+        isOpen={showSubscribe}
+        onClose={() => setShowSubscribe(false)}
+        apiBaseUrl={API_URL}
+      />
     </main>
   );
 }
