@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
@@ -11,10 +11,13 @@ from collections import defaultdict
 import time
 import os
 
-from database import init_db, init_subscribers_table, get_cached, save_cache
-from database import (create_subscriber, get_subscriber_by_email, delete_subscriber,
-                      get_active_subscribers, update_subscriber_alert_count,
-                      update_subscriber_keywords)
+from database import (
+    init_db, init_subscribers_table, get_cached, save_cache,
+    init_sent_alerts_table, init_rate_limits_table, check_rate_limit_db,
+    create_subscriber, get_subscriber_by_email, delete_subscriber,
+    get_active_subscribers, update_subscriber_alert_count,
+    update_subscriber_keywords
+)
 from adzuna import fetch_jobs_from_adzuna
 from email_service import send_email, format_job_alert_email, format_welcome_email
 
@@ -36,26 +39,6 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
-# Rate limiter
-class RateLimiter:
-    def __init__(self, max_requests: int = 10, window_seconds: int = 60):
-        self.max_requests = max_requests
-        self.window_seconds = window_seconds
-        self.requests: dict[str, list[float]] = defaultdict(list)
-
-    def is_allowed(self, client_ip: str) -> bool:
-        now = time.time()
-        self.requests[client_ip] = [
-            t for t in self.requests[client_ip]
-            if now - t < self.window_seconds
-        ]
-        if len(self.requests[client_ip]) >= self.max_requests:
-            return False
-        self.requests[client_ip].append(now)
-        return True
-
-rate_limiter = RateLimiter(max_requests=10, window_seconds=60)
-
 class JobResponse(BaseModel):
     id: Optional[str] = None
     title: str
@@ -74,6 +57,8 @@ class JobResponse(BaseModel):
 class SearchRequest(BaseModel):
     keywords: List[str] = ["Senior Software Engineer", "Senior Data Engineer"]
     days_ago: int = 7
+    limit: int = 50
+    offset: int = 0
 
     @field_validator("keywords")
     @classmethod
@@ -102,6 +87,22 @@ class SearchRequest(BaseModel):
             raise ValueError("days_ago must be at least 1")
         if v > 30:
             raise ValueError("days_ago cannot exceed 30")
+        return v
+
+    @field_validator("limit")
+    @classmethod
+    def validate_limit(cls, v: int) -> int:
+        if v < 1:
+            return 50
+        if v > 100:
+            return 100
+        return v
+
+    @field_validator("offset")
+    @classmethod
+    def validate_offset(cls, v: int) -> int:
+        if v < 0:
+            return 0
         return v
 
 class SubscribeRequest(BaseModel):
@@ -150,6 +151,8 @@ class UpdatePreferencesRequest(BaseModel):
 async def startup():
     await init_db()
     await init_subscribers_table()
+    await init_sent_alerts_table()
+    await init_rate_limits_table()
 
 def get_daily_cache_key(keyword: str, days_ago: int) -> str:
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
@@ -158,14 +161,14 @@ def get_daily_cache_key(keyword: str, days_ago: int) -> str:
 
 @app.middleware("http")
 async def apply_rate_limit(request: Request, call_next):
-    """Apply rate limiting to POST /search endpoint."""
-    if request.method == "POST" and request.url.path == "/search":
+    """Apply SQLite-backed rate limiting to POST endpoints."""
+    if request.method == "POST" and request.url.path in ("/search", "/subscribe", "/_cron/send-alerts"):
         client_ip = request.client.host if request.client else "unknown"
-        if not rate_limiter.is_allowed(client_ip):
+        if not await check_rate_limit_db(client_ip, max_requests=10, window_seconds=60):
             return JSONResponse(
                 status_code=429,
                 content={"error": "Rate limit exceeded. Try again later."},
-                headers={"Retry-After": str(rate_limiter.window_seconds)}
+                headers={"Retry-After": "60"}
             )
     response = await call_next(request)
     return response
@@ -203,7 +206,26 @@ async def search_jobs(req: SearchRequest):
 
     unique_jobs.sort(key=lambda j: (not j.get("whitelist_match", False), j.get("created", "")), reverse=True)
 
-    return unique_jobs
+    total = len(unique_jobs)
+    paginated = unique_jobs[req.offset : req.offset + req.limit]
+
+    # Return paginated slice; client can use total + offset/limit for UI
+    response = JSONResponse(content=paginated)
+    response.headers["X-Total-Count"] = str(total)
+    return response
+
+# --- Cron endpoint for external schedulers (e.g. cron-job.org) ---
+
+@app.post("/_cron/send-alerts")
+async def cron_send_alerts(secret: str = Header(..., alias="x-cron-secret")):
+    """Trigger daily alerts via external cron service. Requires CRON_SECRET env var."""
+    expected = os.getenv("CRON_SECRET", "")
+    if not expected or secret != expected:
+        raise HTTPException(status_code=401, detail="Invalid cron secret")
+    
+    from send_alerts import send_daily_alerts
+    await send_daily_alerts()
+    return {"ok": True, "message": "Alerts processed"}
 
 # --- Subscription endpoints ---
 

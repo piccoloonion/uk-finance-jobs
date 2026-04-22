@@ -33,15 +33,23 @@ export default function Home() {
   const [daysAgo, setDaysAgo] = useState(7);
   const [lastFetchSource, setLastFetchSource] = useState<string>("");
   const [showSubscribe, setShowSubscribe] = useState(false);
+  const [page, setPage] = useState(0);
+  const [limit, setLimit] = useState(20);
+  const [totalJobs, setTotalJobs] = useState(0);
 
-  const fetchJobs = async () => {
+  const fetchJobs = async (newPage = page) => {
     setLoading(true);
     setLastFetchSource("");
     try {
       const res = await fetch(`${API_URL}/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keywords, days_ago: daysAgo }),
+        body: JSON.stringify({
+          keywords,
+          days_ago: daysAgo,
+          limit,
+          offset: newPage * limit,
+        }),
       });
 
       if (!res.ok) {
@@ -50,11 +58,16 @@ export default function Home() {
 
       const data = await res.json();
       setJobs(data);
+      setPage(newPage);
+
+      const totalHeader = res.headers.get("x-total-count");
+      setTotalJobs(totalHeader ? parseInt(totalHeader, 10) : data.length);
 
       setLastFetchSource("Data loaded");
     } catch (error) {
       console.error("Fetch error:", error);
       setJobs([]);
+      setTotalJobs(0);
       setLastFetchSource("Error loading jobs");
     } finally {
       setLoading(false);
@@ -63,7 +76,8 @@ export default function Home() {
 
   const handleKeywordChange = (newKeywords: string[]) => {
     setKeywords(newKeywords);
-    setTimeout(() => fetchJobs(), 100);
+    setPage(0);
+    setTimeout(() => fetchJobs(0), 100);
   };
 
   const addKeyword = (keyword: string) => {
@@ -77,11 +91,14 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetchJobs();
+    fetchJobs(0);
   }, []);
 
   const whitelistCount = jobs.filter((j) => j.whitelist_match).length;
   const financeCount = jobs.length - whitelistCount;
+  const totalPages = Math.ceil(totalJobs / limit);
+  const startIdx = totalJobs > 0 ? page * limit + 1 : 0;
+  const endIdx = Math.min((page + 1) * limit, totalJobs);
 
   return (
     <main className="min-h-screen bg-gray-50">
@@ -124,7 +141,8 @@ export default function Home() {
                   value={daysAgo}
                   onChange={(e) => {
                     setDaysAgo(Number(e.target.value));
-                    setTimeout(() => fetchJobs(), 100);
+                    setPage(0);
+                    setTimeout(() => fetchJobs(0), 100);
                   }}
                   className="bg-white border rounded px-2 py-1 text-sm"
                 >
@@ -133,9 +151,27 @@ export default function Home() {
                 </select>
               </div>
 
+              {/* Page size */}
+              <div className="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2">
+                <label className="text-sm font-medium text-gray-700">Per page:</label>
+                <select
+                  value={limit}
+                  onChange={(e) => {
+                    setLimit(Number(e.target.value));
+                    setPage(0);
+                    setTimeout(() => fetchJobs(0), 100);
+                  }}
+                  className="bg-white border rounded px-2 py-1 text-sm"
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+              </div>
+
               {/* Refresh */}
               <button
-                onClick={fetchJobs}
+                onClick={() => fetchJobs(page)}
                 disabled={loading}
                 className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg disabled:opacity-50 transition-colors"
               >
@@ -178,7 +214,8 @@ export default function Home() {
             {loading ? (
               <span className="animate-pulse">Searching for jobs...</span>
             ) : (
-              `${jobs.length} jobs found`
+              `${totalJobs} jobs found` +
+              (totalJobs > 0 ? ` (showing ${startIdx}-${endIdx})` : "")
             )}
           </h2>
           <div className="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-500">
@@ -205,6 +242,29 @@ export default function Home() {
             {jobs.map((job) => (
               <JobCard key={job.id} job={job} />
             ))}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {totalJobs > 0 && (
+          <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-200">
+            <button
+              onClick={() => fetchJobs(page - 1)}
+              disabled={page === 0 || loading}
+              className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              ← Previous
+            </button>
+            <span className="text-sm text-gray-600">
+              Page {page + 1} of {totalPages || 1}
+            </span>
+            <button
+              onClick={() => fetchJobs(page + 1)}
+              disabled={page >= totalPages - 1 || loading}
+              className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Next →
+            </button>
           </div>
         )}
       </section>
