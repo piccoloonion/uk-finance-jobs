@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 interface JobCardProps {
   job: {
     id: string;
@@ -65,65 +67,76 @@ export default function JobCard({ job }: JobCardProps) {
   ) : null;
 
   return (
-    <a
-      href={job.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="job-card block bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:border-blue-200"
-    >
-      <div className="flex items-start justify-between">
-        <div className="flex-1 min-w-0">
-          {/* Title row */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-base font-semibold text-gray-900 truncate">
-              {job.title}
-            </h3>
-            {job.whitelist_match && (
-              <span className="text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
-                ⭐ Whitelist
+    <div className="job-card block bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:border-blue-200 hover:shadow-md transition-all">
+      <Link
+        href={`/jobs/${encodeURIComponent(job.id)}`}
+        className="block"
+      >
+        <div className="flex items-start justify-between">
+          <div className="flex-1 min-w-0">
+            {/* Title row */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-base font-semibold text-gray-900 truncate">
+                {job.title}
+              </h3>
+              {job.whitelist_match && (
+                <span className="text-xs text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
+                  ⭐ Whitelist
+                </span>
+              )}
+            </div>
+
+            {/* Company & Location */}
+            <div className="flex items-center gap-2 mt-1 text-sm text-gray-600">
+              <span className="font-medium text-gray-800">{job.company}</span>
+              <span className="text-gray-400">•</span>
+              <span>{job.location}</span>
+            </div>
+
+            {/* Tags row */}
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <span className="text-sm font-medium text-blue-600">
+                {displaySalary()}
               </span>
-            )}
+              {predictedTag}
+              {contractTag}
+              {job.category && (
+                <span className="text-xs text-gray-500 bg-gray-50 px-2 py-0.5 rounded-full">
+                  {job.category}
+                </span>
+              )}
+            </div>
           </div>
 
-          {/* Company & Location */}
-          <div className="flex items-center gap-2 mt-1 text-sm text-gray-600">
-            <span className="font-medium text-gray-800">{job.company}</span>
-            <span className="text-gray-400">•</span>
-            <span>{job.location}</span>
-          </div>
-
-          {/* Tags row */}
-          <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <span className="text-sm font-medium text-blue-600">
-              {displaySalary()}
+          {/* Right column */}
+          <div className="ml-4 flex flex-col items-end gap-1 shrink-0">
+            <span className="text-sm text-gray-500 whitespace-nowrap">
+              {daysAgo(job.created)}
             </span>
-            {predictedTag}
-            {contractTag}
-            {job.category && (
-              <span className="text-xs text-gray-500 bg-gray-50 px-2 py-0.5 rounded-full">
-                {job.category}
-              </span>
-            )}
           </div>
         </div>
 
-        {/* Right column */}
-        <div className="ml-4 flex flex-col items-end gap-1 shrink-0">
-          <span className="text-sm text-gray-500 whitespace-nowrap">
-            {daysAgo(job.created)}
-          </span>
-          <span className="text-blue-600 hover:text-blue-700 text-sm font-medium">
-            Apply →
-          </span>
-        </div>
-      </div>
+        {/* Description preview */}
+        {job.description && (
+          <p className="text-sm text-gray-500 mt-3 line-clamp-2 leading-relaxed">
+            {job.description.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ')}
+          </p>
+        )}
+      </Link>
 
-      {/* Description preview */}
-      {job.description && (
-        <p className="text-sm text-gray-500 mt-3 line-clamp-2 leading-relaxed">
-          {job.description.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ')}
-        </p>
-      )}
-    </a>
+      {/* Apply link */}
+      <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between">
+        <span className="text-xs text-gray-400">via Adzuna</span>
+        <a
+          href={job.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+        >
+          Apply →
+        </a>
+      </div>
+    </div>
   );
 }

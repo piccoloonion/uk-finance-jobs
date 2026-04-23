@@ -31,6 +31,7 @@ async def send_daily_alerts():
     await init_db()
     await init_subscribers_table()
     await init_sent_alerts_table()
+    await init_jobs_table()
 
     # Keep DB lean — prune alerts older than 30 days
     await prune_old_sent_alerts(days=30)

@@ -13,10 +13,11 @@ import os
 
 from database import (
     init_db, init_subscribers_table, get_cached, save_cache,
-    init_sent_alerts_table, init_rate_limits_table, check_rate_limit_db,
+    init_sent_alerts_table, init_rate_limits_table, init_jobs_table,
+    check_rate_limit_db, upsert_job, get_job_by_id,
     create_subscriber, get_subscriber_by_email, delete_subscriber,
     get_active_subscribers, update_subscriber_alert_count,
-    update_subscriber_keywords
+    update_subscriber_keywords, get_all_cache
 )
 from adzuna import fetch_jobs_from_adzuna
 from email_service import send_email, format_job_alert_email, format_welcome_email
@@ -153,6 +154,7 @@ async def startup():
     await init_subscribers_table()
     await init_sent_alerts_table()
     await init_rate_limits_table()
+    await init_jobs_table()
 
 def get_daily_cache_key(keyword: str, days_ago: int) -> str:
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
@@ -203,6 +205,11 @@ async def search_jobs(req: SearchRequest):
         if job["id"] not in seen_ids:
             seen_ids.add(job["id"])
             unique_jobs.append(job)
+            # Persist each job for detail-page lookups
+            try:
+                await upsert_job(job)
+            except Exception as e:
+                logger.warning(f"Failed to upsert job {job.get('id')}: {e}")
 
     unique_jobs.sort(key=lambda j: (not j.get("whitelist_match", False), j.get("created", "")), reverse=True)
 
@@ -213,6 +220,14 @@ async def search_jobs(req: SearchRequest):
     response = JSONResponse(content=paginated)
     response.headers["X-Total-Count"] = str(total)
     return response
+
+@app.get("/job/{job_id}")
+async def get_job_detail(job_id: str):
+    """Fetch a single job by ID for detail pages."""
+    job = await get_job_by_id(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 # --- Cron endpoint for external schedulers (e.g. cron-job.org) ---
 
@@ -305,14 +320,10 @@ async def get_subscriber(email: str):
 
 @app.get("/cache-stats")
 async def cache_stats():
-    from database import DB_PATH
-    import aiosqlite
-    
     info = {}
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT cache_key, fetched_at FROM job_cache") as cursor:
-            async for row in cursor:
-                info[row[0]] = row[1]
+    rows = await get_all_cache()
+    for row in rows:
+        info[row[0]] = row[1]
     
     return {
         "total_cached_queries": len(info),
