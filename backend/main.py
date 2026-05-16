@@ -10,14 +10,19 @@ from datetime import datetime
 from collections import defaultdict
 import time
 import os
+import uuid
+import stripe
 
 from database import (
     init_db, init_subscribers_table, get_cached, save_cache,
     init_sent_alerts_table, init_rate_limits_table, init_jobs_table,
+    init_sponsored_jobs_table,
     check_rate_limit_db, upsert_job, get_job_by_id,
     create_subscriber, get_subscriber_by_email, delete_subscriber,
     get_active_subscribers, update_subscriber_alert_count,
-    update_subscriber_keywords, get_all_cache
+    update_subscriber_keywords, get_all_cache,
+    create_sponsored_job, get_active_sponsored_jobs,
+    get_sponsored_job_by_session, activate_sponsored_job, expire_stale_sponsored_jobs
 )
 from adzuna import fetch_jobs_from_adzuna
 from email_service import send_email, format_job_alert_email, format_welcome_email
@@ -25,6 +30,14 @@ from email_service import send_email, format_job_alert_email, format_welcome_ema
 # Configure logging for internal errors
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Stripe configuration
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+
+SPONSOR_PRICE_PENCE = 4900  # £49.00 in pence
 
 app = FastAPI(title="UK Finance Job Aggregator")
 
@@ -148,6 +161,50 @@ class UpdatePreferencesRequest(BaseModel):
     days_ago: int = None
     min_salary: int = None
 
+class SponsorCheckoutRequest(BaseModel):
+    job_title: str
+    company_name: str
+    job_url: str
+    contact_email: str
+
+    @field_validator("contact_email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        if "@" not in v or "." not in v.split("@")[-1]:
+            raise ValueError("Invalid email address")
+        return v.lower().strip()
+
+    @field_validator("job_title")
+    @classmethod
+    def validate_job_title(cls, v: str) -> str:
+        if not v or len(v.strip()) < 2:
+            raise ValueError("Job title is required")
+        return v.strip()[:200]
+
+    @field_validator("company_name")
+    @classmethod
+    def validate_company_name(cls, v: str) -> str:
+        if not v or len(v.strip()) < 1:
+            raise ValueError("Company name is required")
+        return v.strip()[:200]
+
+    @field_validator("job_url")
+    @classmethod
+    def validate_job_url(cls, v: str) -> str:
+        if not v.startswith("http://") and not v.startswith("https://"):
+            raise ValueError("Invalid URL — must start with http:// or https://")
+        return v.strip()[:500]
+
+class SponsoredJobResponse(BaseModel):
+    id: str
+    company_name: str
+    job_title: str
+    job_url: str
+    contact_email: str
+    amount_paid: float
+    created_at: str
+    expires_at: str
+
 @app.on_event("startup")
 async def startup():
     await init_db()
@@ -155,6 +212,7 @@ async def startup():
     await init_sent_alerts_table()
     await init_rate_limits_table()
     await init_jobs_table()
+    await init_sponsored_jobs_table()
 
 def get_daily_cache_key(keyword: str, days_ago: int) -> str:
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
@@ -164,7 +222,7 @@ def get_daily_cache_key(keyword: str, days_ago: int) -> str:
 @app.middleware("http")
 async def apply_rate_limit(request: Request, call_next):
     """Apply SQLite-backed rate limiting to POST endpoints."""
-    if request.method == "POST" and request.url.path in ("/search", "/subscribe", "/_cron/send-alerts"):
+    if request.method == "POST" and request.url.path in ("/search", "/subscribe", "/_cron/send-alerts", "/sponsor-checkout", "/sponsored-webhook"):
         client_ip = request.client.host if request.client else "unknown"
         if not await check_rate_limit_db(client_ip, max_requests=10, window_seconds=60):
             return JSONResponse(
@@ -213,8 +271,41 @@ async def search_jobs(req: SearchRequest):
 
     unique_jobs.sort(key=lambda j: (not j.get("whitelist_match", False), j.get("created", "")), reverse=True)
 
-    total = len(unique_jobs)
-    paginated = unique_jobs[req.offset : req.offset + req.limit]
+    # Fetch active sponsored jobs to prepend
+    try:
+        sponsored = await get_active_sponsored_jobs()
+    except Exception as e:
+        logger.warning(f"Failed to fetch sponsored jobs: {e}")
+        sponsored = []
+
+    # Prepend sponsored jobs (they sort first), then whitelist-match, then by date
+    sponsored_ids = {s["id"] for s in sponsored}
+    sponsored_as_jobs = [
+        {
+            "id": s["id"],
+            "title": s["job_title"],
+            "company": s["company_name"],
+            "location": "",
+            "salary_min": None,
+            "salary_max": None,
+            "salary_predicted": False,
+            "created": s["created_at"],
+            "description": "",
+            "url": s["job_url"],
+            "category": "sponsored",
+            "whitelist_match": False,
+            "contract_type": None,
+            "_sponsored": True,
+        }
+        for s in sponsored
+    ]
+
+    # Filter out any job that matches a sponsored ID (avoid dupes)
+    unique_jobs = [j for j in unique_jobs if j["id"] not in sponsored_ids]
+
+    total = len(sponsored_as_jobs) + len(unique_jobs)
+    combined = sponsored_as_jobs + unique_jobs
+    paginated = combined[req.offset : req.offset + req.limit]
 
     # Return paginated slice; client can use total + offset/limit for UI
     response = JSONResponse(content=paginated)
@@ -340,3 +431,102 @@ async def stats():
         "pro_subscribers": len(pro_subs),
         "total_subscribers": len(free_subs) + len(pro_subs),
     }
+
+# ─── Sponsorship endpoints ───
+
+@app.post("/sponsor-checkout")
+async def sponsor_checkout(req: SponsorCheckoutRequest):
+    """Create a Stripe Checkout session for job sponsorship (£49)."""
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe not configured — set STRIPE_SECRET_KEY")
+
+    sponsor_id = str(uuid.uuid4())
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+    try:
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "gbp",
+                    "product_data": {
+                        "name": f"Sponsored job: {req.job_title} at {req.company_name}",
+                        "description": "30-day featured job listing on UK Finance Jobs",
+                    },
+                    "unit_amount": SPONSOR_PRICE_PENCE,
+                },
+                "quantity": 1,
+            }],
+            customer_email=req.contact_email,
+            metadata={
+                "sponsor_id": sponsor_id,
+                "job_title": req.job_title,
+                "company_name": req.company_name,
+                "job_url": req.job_url,
+            },
+            success_url=f"{frontend_url}/?sponsor=success",
+            cancel_url=f"{frontend_url}/?sponsor=cancel",
+        )
+
+        # Store sponsorship record (not active yet — activates on webhook)
+        await create_sponsored_job(
+            id=sponsor_id,
+            company_name=req.company_name,
+            job_title=req.job_title,
+            job_url=req.job_url,
+            contact_email=req.contact_email,
+            stripe_session_id=session.id,
+            is_active=0,
+        )
+
+        return {"checkout_url": session.url, "session_id": session.id}
+
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error: {e}")
+        raise HTTPException(status_code=502, detail="Payment service error. Please try again.")
+    except Exception as e:
+        logger.error(f"Sponsor checkout error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create checkout session")
+
+
+@app.get("/sponsored", response_model=List[SponsoredJobResponse])
+async def list_sponsored():
+    """Return active sponsored jobs (paid + not expired)."""
+    await expire_stale_sponsored_jobs()
+    jobs = await get_active_sponsored_jobs()
+    return jobs
+
+
+@app.post("/sponsored-webhook")
+async def sponsored_webhook(request: Request):
+    """Handle Stripe checkout.session.completed events."""
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    if not sig_header:
+        raise HTTPException(status_code=400, detail="Missing stripe-signature header")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        session_id = session.get("id")
+
+        if session.get("payment_status") == "paid":
+            await activate_sponsored_job(session_id)
+            logger.info(f"Sponsored job activated for session {session_id}")
+        else:
+            logger.info(f"Session {session_id} completed but not yet paid")
+
+    return {"ok": True}

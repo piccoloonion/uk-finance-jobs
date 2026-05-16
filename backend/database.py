@@ -184,6 +184,41 @@ async def init_jobs_table():
         await db.commit()
 
 
+async def init_sponsored_jobs_table():
+    async with get_db() as db:
+        if db.is_pg:
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS sponsored_jobs (
+                    id TEXT PRIMARY KEY,
+                    company_name TEXT NOT NULL,
+                    job_title TEXT NOT NULL,
+                    job_url TEXT NOT NULL,
+                    contact_email TEXT NOT NULL,
+                    stripe_session_id TEXT,
+                    amount_paid REAL DEFAULT 0,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+            ''')
+        else:
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS sponsored_jobs (
+                    id TEXT PRIMARY KEY,
+                    company_name TEXT NOT NULL,
+                    job_title TEXT NOT NULL,
+                    job_url TEXT NOT NULL,
+                    contact_email TEXT NOT NULL,
+                    stripe_session_id TEXT,
+                    amount_paid REAL DEFAULT 0,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+            ''')
+        await db.commit()
+
+
 # ─── Cache operations ───
 
 async def get_cached(cache_key: str):
@@ -448,3 +483,97 @@ async def get_job_by_id(job_id: str):
             "whitelist_match": bool(row[11]),
             "contract_type": row[12],
         }
+
+
+# ─── Sponsored jobs ───
+
+async def create_sponsored_job(
+    id: str,
+    company_name: str,
+    job_title: str,
+    job_url: str,
+    contact_email: str,
+    stripe_session_id: str = None,
+    amount_paid: float = 0,
+    is_active: int = 0,
+):
+    from datetime import datetime, timedelta
+    now = datetime.utcnow()
+    expires_at = (now + timedelta(days=30)).isoformat()
+    async with get_db() as db:
+        if db.is_pg:
+            await db.execute(
+                '''INSERT INTO sponsored_jobs
+                   (id, company_name, job_title, job_url, contact_email,
+                    stripe_session_id, amount_paid, is_active, created_at, expires_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)''',
+                id, company_name, job_title, job_url, contact_email,
+                stripe_session_id, amount_paid, is_active, now.isoformat(), expires_at
+            )
+        else:
+            await db.execute(
+                '''INSERT INTO sponsored_jobs
+                   (id, company_name, job_title, job_url, contact_email,
+                    stripe_session_id, amount_paid, is_active, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                id, company_name, job_title, job_url, contact_email,
+                stripe_session_id, amount_paid, is_active, now.isoformat(), expires_at
+            )
+        await db.commit()
+
+
+async def get_active_sponsored_jobs():
+    from datetime import datetime
+    now = datetime.utcnow().isoformat()
+    async with get_db() as db:
+        rows = await db.fetchall(
+            "SELECT id, company_name, job_title, job_url, contact_email, "
+            "amount_paid, created_at, expires_at "
+            "FROM sponsored_jobs WHERE is_active = 1 AND expires_at > ? "
+            "ORDER BY created_at DESC",
+            now
+        )
+        return [
+            {
+                "id": r[0],
+                "company_name": r[1],
+                "job_title": r[2],
+                "job_url": r[3],
+                "contact_email": r[4],
+                "amount_paid": r[5],
+                "created_at": r[6],
+                "expires_at": r[7],
+            }
+            for r in rows
+        ]
+
+
+async def get_sponsored_job_by_session(session_id: str):
+    async with get_db() as db:
+        row = await db.fetchone(
+            "SELECT id, stripe_session_id, is_active FROM sponsored_jobs WHERE stripe_session_id = ?",
+            session_id
+        )
+        return row
+
+
+async def activate_sponsored_job(session_id: str):
+    """Mark a sponsored job as active after successful payment."""
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE sponsored_jobs SET is_active = 1, amount_paid = 4900 WHERE stripe_session_id = ?",
+            session_id
+        )
+        await db.commit()
+
+
+async def expire_stale_sponsored_jobs():
+    """Deactivate expired sponsored listings."""
+    from datetime import datetime
+    now = datetime.utcnow().isoformat()
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE sponsored_jobs SET is_active = 0 WHERE expires_at < ? AND is_active = 1",
+            now
+        )
+        await db.commit()

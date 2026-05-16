@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import JobCard from "@/components/JobCard";
 import KeywordInput from "@/components/KeywordInput";
 import SubscribeModal from "@/components/SubscribeModal";
+import SponsoredBanner from "@/components/SponsoredBanner";
+import SponsorModal from "@/components/SponsorModal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -21,6 +23,7 @@ interface Job {
   category: string;
   whitelist_match: boolean;
   contract_type: string;
+  _sponsored?: boolean;
 }
 
 export default function Home() {
@@ -33,6 +36,7 @@ export default function Home() {
   const [daysAgo, setDaysAgo] = useState(7);
   const [lastFetchSource, setLastFetchSource] = useState<string>("");
   const [showSubscribe, setShowSubscribe] = useState(false);
+  const [showSponsor, setShowSponsor] = useState(false);
   const [page, setPage] = useState(0);
   const [limit, setLimit] = useState(20);
   const [totalJobs, setTotalJobs] = useState(0);
@@ -121,6 +125,12 @@ export default function Home() {
                 className="bg-green-600 hover:bg-green-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors whitespace-nowrap"
               >
                 Get Job Alerts
+              </button>
+              <button
+                onClick={() => setShowSponsor(true)}
+                className="bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors whitespace-nowrap"
+              >
+                Sponsor a Job
               </button>
             </div>
           </div>
@@ -240,7 +250,11 @@ export default function Home() {
         ) : (
           <div className="flex flex-col gap-3 sm:gap-4">
             {jobs.map((job) => (
-              <JobCard key={job.id} job={job} />
+              job._sponsored ? (
+                <SponsoredBanner key={job.id} job={job} />
+              ) : (
+                <JobCard key={job.id} job={job} />
+              )
             ))}
           </div>
         )}
@@ -272,6 +286,12 @@ export default function Home() {
       <SubscribeModal
         isOpen={showSubscribe}
         onClose={() => setShowSubscribe(false)}
+        apiBaseUrl={API_URL}
+      />
+
+      <SponsorModal
+        isOpen={showSponsor}
+        onClose={() => setShowSponsor(false)}
         apiBaseUrl={API_URL}
       />
     </main>
